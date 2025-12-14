@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Discord Alerts",
+  "version": "1.0",
+  "description": "Monitors Discord channels for Pokemon queue alerts and plays audio notifications.",
+  "permissions": ["storage", "tabs", "activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://discord.com/channels/*"
+      ],
+      "js": ["constants.js", "contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Discord Alerts Settings",
+    "default_icon": {
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["alert.mp3"],
+      "matches": ["https://discord.com/*"]
+    }
+  ]
+}

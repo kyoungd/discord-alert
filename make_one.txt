@@ -1,0 +1,172 @@
+=== File: ./README.md ===
+
+# X Auto Scroll Chrome Extension (v2.3)
+
+Hands‑free utility that **reveals new tweets without reloading X/Twitter tabs**. No polling, no page reloads — just instant, automatic scroll‑to‑top when fresh content lands.
+
+## Features
+- Event‑driven via MutationObserver.
+- Enable/disable with a single toggle in the popup.
+- Zero data collection; runs entirely client‑side.
+
+## Installation
+1. Download or clone this repo.
+2. Ensure **icon48.png** & **icon128.png** are present in the `icons/` folder (Chrome scales 48 px down for the toolbar).
+3. Open **chrome://extensions** and enable *Developer mode*.
+4. Click **Load unpacked** and select the folder.
+
+That’s it — open `x.com/home` and watch new tweets surface automatically!
+
+=== End of ./README.md ===
+
+=== File: ./popup.js ===
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const toggle = document.getElementById('enableToggle');
+  const statusEl = document.getElementById('status');
+
+  const setVisual = (enabled) => {
+    toggle.classList.toggle('active', enabled);
+    toggle.setAttribute('aria-checked', enabled);
+    statusEl.textContent = enabled ? 'Auto scroll is ON' : 'Auto scroll is OFF';
+    statusEl.style.color = enabled ? '#28a745' : '#dc3545';
+  };
+
+  const { isEnabled } = await chrome.storage.sync.get({ isEnabled: true });
+  setVisual(isEnabled);
+
+  toggle.addEventListener('click', async () => {
+    const newState = !(toggle.getAttribute('aria-checked') === 'true');
+    await chrome.storage.sync.set({ isEnabled: newState });
+    setVisual(newState);
+  });
+});
+=== End of ./popup.js ===
+
+=== File: ./manifest.json ===
+
+{
+  "manifest_version": 3,
+  "name": "X Auto Scroll",
+  "version": "2.3",
+  "description": "Automatically reveals new tweets on X/Twitter with zero page reloads.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://twitter.com/*",
+        "https://x.com/*"
+      ],
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "X Auto Scroll Settings",
+    "default_icon": {
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
+=== End of ./manifest.json ===
+
+=== File: ./contentScript.js ===
+
+(() => {
+  let observer = null;
+  let lastHandled = 0;  // 10‑second debounce for scroll action
+
+  // click banner or smooth‑scroll
+  const clickBannerOrScroll = () => {
+    const now = Date.now();
+    if (now - lastHandled < 10_000) return;
+    lastHandled = now;
+
+    const bannerBtn = document.querySelector(
+      'div[role="button"][data-testid="cellInnerDiv"], ' +
+      'div[role="button"][aria-label*="See new"], ' +
+      'div[role="button"][data-testid="toast"]'
+    );
+    if (bannerBtn) {
+      bannerBtn.click();
+      return;
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // (re)arm observer on the timeline node
+  const armObserver = () => {
+    if (observer) observer.disconnect();
+    const timeline = document.querySelector('main section[role="region"]');
+    if (!timeline) return;
+
+    observer = new MutationObserver((muts) => {
+      if (document.hidden) return;
+      if (muts.some((m) => m.addedNodes.length)) clickBannerOrScroll();
+    });
+    observer.observe(timeline, { childList: true, subtree: true });
+  };
+
+  // Throttled SPA‑route watcher — re‑arm when timeline section is replaced
+  let rearmTO;
+  new MutationObserver(() => {
+    clearTimeout(rearmTO);
+    rearmTO = setTimeout(armObserver, 500);  // wait 0.5 s for DOM stabilize
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // Initial arm
+  chrome.storage.sync.get({ isEnabled: true }, (s) => s.isEnabled && armObserver());
+
+  // React to toggle changes
+  chrome.storage.onChanged.addListener((_, area) => {
+    if (area !== 'sync') return;
+    chrome.storage.sync.get({ isEnabled: true }, (s) => {
+      if (!s.isEnabled && observer) {
+        observer.disconnect();
+        observer = null;
+      } else if (s.isEnabled) {
+        armObserver();
+      }
+    });
+  });
+})();
+=== End of ./contentScript.js ===
+
+=== File: ./popup.html ===
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { width: 260px; padding: 15px; font-family: system-ui, sans-serif; }
+    .header { text-align: center; margin-bottom: 16px; color: #1da1f2; font-weight: 600; }
+    .toggle-container { display: flex; justify-content: space-between; align-items: center; }
+    .toggle { position: relative; width: 46px; height: 22px; background: #ccc; border-radius: 22px; cursor: pointer; transition: background 0.3s; }
+    .toggle.active { background: #1da1f2; }
+    .toggle-slider { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: #fff; border-radius: 50%; transition: transform 0.3s; }
+    .toggle.active .toggle-slider { transform: translateX(24px); }
+    .status { text-align: center; font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="header">X Auto Scroll</div>
+
+  <div class="toggle-container">
+    <span>Enable Auto Scroll</span>
+    <div class="toggle" id="enableToggle" role="switch" aria-checked="true"><div class="toggle-slider"></div></div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+=== End of ./popup.html ===
+
