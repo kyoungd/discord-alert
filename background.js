@@ -151,6 +151,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       break;
 
+    case 'OPEN_URL':
+      if (message.data.url) {
+        logBackgroundMessage(`🔗 Opening URL: ${message.data.url}`);
+        chrome.tabs.create({ url: message.data.url });
+      }
+      break;
+
     case 'ALERT_PLAYED':
       logBackgroundMessage(`🔊 Alert played on tab ${tabId}`, {
         success: message.data.success,

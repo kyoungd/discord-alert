@@ -2,6 +2,10 @@
 // This file is loaded before contentScript.js
 
 const DISCORD_ALERT_CONFIG = {
+    // Auto-open URLs when queue detected
+    AUTO_OPEN_ENABLED: true,
+    POKEMON_CENTER_URL: 'https://pokemoncenter.com',
+
     // Check Interval (in ms)
     // How often to scan for new messages
     CHECK_INTERVAL_MS: 5000,

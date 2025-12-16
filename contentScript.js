@@ -81,6 +81,35 @@
     return newMessages;
   };
 
+  // Extract Costco product URL from embed (skip membership links)
+  const extractCostcoProductUrl = (embed) => {
+    const links = embed.querySelectorAll('a[href]');
+    
+    for (const link of links) {
+      const surroundingText = (link.parentElement?.textContent || '').toLowerCase();
+      
+      // Must have "queue" or "link" in surrounding text
+      const hasQueueOrLink = surroundingText.includes('queue') || surroundingText.includes('link');
+      
+      // Must NOT have "membership" in surrounding text
+      const hasMembership = surroundingText.includes('membership');
+      
+      if (hasQueueOrLink && !hasMembership) {
+        return link.href;
+      }
+    }
+    
+    // Fallback: return first non-membership link
+    for (const link of links) {
+      const surroundingText = (link.parentElement?.textContent || '').toLowerCase();
+      if (!surroundingText.includes('membership')) {
+        return link.href;
+      }
+    }
+    
+    return null;
+  };
+
   // Check a Discord embed element for queue keywords
   const checkDiscordEmbedForQueue = (element) => {
     // Look for embed descriptions - these contain the main text content
@@ -99,12 +128,24 @@
 
       // Check for Pokemon Center queue
       if (/pok[eé]mon center\s*queue/i.test(textContent) || /queue.*pok[eé]mon center/i.test(textContent)) {
-        return { found: true, type: 'POKEMON_CENTER', text: textContent.substring(0, 100) };
+        return { 
+          found: true, 
+          type: 'POKEMON_CENTER', 
+          text: textContent.substring(0, 100),
+          url: DISCORD_ALERT_CONFIG.POKEMON_CENTER_URL
+        };
       }
 
       // Check for Costco queue
       if (/(queue\s*.*?\s*costco)|(costco\s*.*?\s*queue)/i.test(textContent)) {
-        return { found: true, type: 'COSTCO', text: textContent.substring(0, 100) };
+        // Extract product URL (skip membership links)
+        const productUrl = extractCostcoProductUrl(embed);
+        return { 
+          found: true, 
+          type: 'COSTCO', 
+          text: textContent.substring(0, 100),
+          url: productUrl
+        };
       }
 
       // Check for Target queue (mavely.app.link or target.com/p)
@@ -410,6 +451,15 @@
             });
             
             lastAlertTime = now;
+
+            // Auto-open URL for Pokemon Center and Costco (before alarm)
+            if (DISCORD_ALERT_CONFIG.AUTO_OPEN_ENABLED && result.url) {
+              if (result.type === 'POKEMON_CENTER' || result.type === 'COSTCO') {
+                logToBackground(`🔗 Opening: ${result.url}`);
+                sendStatusMessage('OPEN_URL', { url: result.url });
+              }
+            }
+
             playAlert();
           }
         }
