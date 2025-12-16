@@ -86,14 +86,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender.tab?.id;
   const url = sender.tab?.url;
 
-  if (DEBUG_PRINT) {
-    logBackgroundMessage(`Message received from tab ${tabId}`, {
-      type: message.type,
-      url: url?.substring(0, 60) + '...',
-      data: message.data
-    });
-  }
-
   switch (message.type) {
     case 'CONTENT_LOG':
       // Log messages from content script to service worker console
@@ -244,53 +236,33 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-// Scan for Discord pages
+// Scan for Discord pages (silent - just for internal tracking)
 const scanForDiscordPages = () => {
   chrome.tabs.query({}, (tabs) => {
     const discordTabs = tabs.filter(tab =>
       tab.url?.includes('discord.com/channels')
     );
-
-    if (discordTabs.length > 0) {
-      if (DEBUG_PRINT) {
-        logBackgroundMessage(`📍 SCAN RESULT: Found ${discordTabs.length} Discord channel page(s):`);
-        discordTabs.forEach(tab => {
-          logBackgroundMessage(`  Tab ${tab.id}: ${tab.url?.substring(0, 70)}...`);
-        });
-      }
-    } else {
-      if (DEBUG_PRINT) {
-        logBackgroundMessage(`❌ SCAN RESULT: No Discord channel pages found`);
-        logBackgroundMessage(`💡 Open discord.com/channels/... to start monitoring`);
-      }
-    }
+    // Silent scan - no logging (content script handles pulse)
   });
 };
 
-// Keep service worker alive and log periodic status
+// Keep service worker alive (silent - no logging)
 setInterval(() => {
-  const activeTabsCount = tabStatus.size;
-  if (DEBUG_PRINT) {
-    logBackgroundMessage(`Service worker heartbeat - tracking ${activeTabsCount} active tabs`);
-  }
-
   // Scan for Discord pages every heartbeat
   scanForDiscordPages();
 
-  // Clean up old tab status (older than 5 minutes)
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  // Clean up old tab status (older than 10 minutes) - silent cleanup
+  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
   for (const [tabId, status] of tabStatus.entries()) {
-    if (status.lastUpdate < fiveMinutesAgo) {
-      logBackgroundMessage(`Cleaning up stale tab status: ${tabId}`);
+    if (status.lastUpdate < tenMinutesAgo) {
       tabStatus.delete(tabId);
     }
   }
 }, 30000); // Every 30 seconds
 
-logBackgroundMessage('Service worker initialized and ready');
+logBackgroundMessage('🚀 Service worker ready');
 
-// Perform initial scan for Discord pages
+// Perform initial scan for Discord pages (silent)
 setTimeout(() => {
-  logBackgroundMessage('🔍 Performing initial scan for Discord pages...');
   scanForDiscordPages();
 }, 1000);

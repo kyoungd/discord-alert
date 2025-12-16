@@ -34,28 +34,47 @@
     timestamp: new Date().toISOString()
   });
 
-  // Track seen message IDs to avoid duplicate alerts
-  const seenMessageIds = new Set();
+  // Track the highest message ID we've seen (Discord Snowflake IDs always increase)
+  // Only messages with IDs higher than this will trigger alerts
+  let highestSeenMessageId = 0n; // BigInt for large Discord IDs
 
   // Track user interaction and audio context state
   let hasAudioPermission = false;
   let audioContext = null;
   let pendingAlert = false;
   let surveillanceInterval = null;
+  let surveillanceStartTime = null;
+  let lastAlertTime = 0; // For debouncing alerts
+  let scanCount = 0; // For pulse timing
+  let lastPulseTime = 0; // Track when we last sent a pulse
 
-  // Get new Discord messages we haven't processed yet
+  // Get new Discord messages (only those with IDs higher than our threshold)
   const getNewDiscordMessages = () => {
     const containers = document.querySelectorAll('[id^="message-accessories-"]');
     const newMessages = [];
 
     for (const container of containers) {
-      const messageId = container.id.replace('message-accessories-', '');
-      if (!seenMessageIds.has(messageId)) {
-        seenMessageIds.add(messageId);
-        newMessages.push({
-          id: messageId,
-          element: container
-        });
+      const messageIdStr = container.id.replace('message-accessories-', '');
+      try {
+        const messageId = BigInt(messageIdStr);
+        
+        // Only process messages with IDs higher than our threshold
+        if (messageId > highestSeenMessageId) {
+          newMessages.push({
+            id: messageIdStr,
+            numericId: messageId,
+            element: container
+          });
+        }
+      } catch (e) {
+        // Skip invalid IDs
+      }
+    }
+
+    // Update the threshold to the highest ID we found
+    for (const msg of newMessages) {
+      if (msg.numericId > highestSeenMessageId) {
+        highestSeenMessageId = msg.numericId;
       }
     }
 
@@ -345,35 +364,74 @@
 
   // Main surveillance function - runs every 5 seconds
   const performSurveillanceScan = () => {
+    const now = Date.now();
+    const timeSinceStart = now - surveillanceStartTime;
+    const isGracePeriod = timeSinceStart < DISCORD_ALERT_CONFIG.INITIAL_GRACE_PERIOD_MS;
+    const isVerboseMode = timeSinceStart < DISCORD_ALERT_CONFIG.VERBOSE_LOGGING_DURATION_MS;
+    
+    scanCount++;
+
+    // In quiet mode, send pulse at the configured interval
+    if (!isVerboseMode) {
+      const timeSinceLastPulse = now - lastPulseTime;
+      if (timeSinceLastPulse >= DISCORD_ALERT_CONFIG.PULSE_INTERVAL_MS) {
+        logToBackground('💓');
+        lastPulseTime = now;
+      }
+    }
+
     const newMessages = getNewDiscordMessages();
 
     if (newMessages.length > 0) {
-      logToBackground(`📨 Found ${newMessages.length} new message(s)`);
+      if (isGracePeriod) {
+        // During grace period, acknowledge new messages but don't check for alerts
+        logToBackground(`⏳ Grace period: ignoring ${newMessages.length} message(s)`);
+      } else {
+        logToBackground(`📨 Found ${newMessages.length} new message(s)`);
 
-      for (const msg of newMessages) {
-        const result = checkDiscordEmbedForQueue(msg.element);
-        
-        if (result.found) {
-          logToBackground(`🚨 ${result.type} QUEUE DETECTED!`);
-          logToBackground(`Text preview: ${result.text}...`);
+        for (const msg of newMessages) {
+          const result = checkDiscordEmbedForQueue(msg.element);
           
-          sendStatusMessage(`${result.type}_QUEUE_DETECTED`, {
-            messageId: msg.id,
-            type: result.type,
-            timestamp: new Date().toISOString()
-          });
-          
-          playAlert();
+          if (result.found) {
+            // Check debounce - don't alert if we just alerted recently
+            const timeSinceLastAlert = now - lastAlertTime;
+            if (timeSinceLastAlert < DISCORD_ALERT_CONFIG.ALERT_DEBOUNCE_MS) {
+              logToBackground(`⏳ Alert debounced (${Math.round(timeSinceLastAlert/1000)}s since last)`);
+              continue;
+            }
+
+            logToBackground(`🚨 ${result.type} QUEUE DETECTED!`);
+            logToBackground(`Text preview: ${result.text}...`);
+            
+            sendStatusMessage(`${result.type}_QUEUE_DETECTED`, {
+              messageId: msg.id,
+              type: result.type,
+              timestamp: new Date().toISOString()
+            });
+            
+            lastAlertTime = now;
+            playAlert();
+          }
         }
       }
     } else {
-      logToBackground(`👁️ Scanning... ✓ No new messages`);
+      // Only log "no new messages" during verbose mode (first 60 seconds)
+      if (isVerboseMode) {
+        if (isGracePeriod) {
+          const remaining = Math.round((DISCORD_ALERT_CONFIG.INITIAL_GRACE_PERIOD_MS - timeSinceStart) / 1000);
+          logToBackground(`⏳ Grace period (${remaining}s remaining)... ✓ No new messages`);
+        } else {
+          logToBackground(`👁️ Scanning... ✓ No new messages`);
+        }
+      }
     }
 
+    // Send status update (silent heartbeat to keep tab tracking alive)
     sendStatusMessage('SCAN_COMPLETE', {
       channel: channelPath,
       newMessages: newMessages.length,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      silent: !isVerboseMode // Background won't log if silent
     });
   };
 
@@ -385,27 +443,55 @@
 
     logToBackground('🚀 Starting surveillance...');
     
-    // Initial scan to mark existing messages as seen
+    // Find the highest message ID on the page - only messages newer than this will trigger alerts
     const existingMessages = document.querySelectorAll('[id^="message-accessories-"]');
-    logToBackground(`📋 Marking ${existingMessages.length} existing messages as seen`);
+    let messageCount = 0;
     
     for (const container of existingMessages) {
-      const messageId = container.id.replace('message-accessories-', '');
-      seenMessageIds.add(messageId);
+      const messageIdStr = container.id.replace('message-accessories-', '');
+      try {
+        const messageId = BigInt(messageIdStr);
+        if (messageId > highestSeenMessageId) {
+          highestSeenMessageId = messageId;
+        }
+        messageCount++;
+      } catch (e) {
+        // Skip invalid IDs
+      }
     }
+    
+    logToBackground(`📋 Found ${messageCount} existing messages, threshold ID: ${highestSeenMessageId}`);
+
+    // Track start time for verbose/quiet mode switching
+    surveillanceStartTime = Date.now();
+    const gracePeriodSeconds = DISCORD_ALERT_CONFIG.INITIAL_GRACE_PERIOD_MS / 1000;
+    const verboseDurationSeconds = DISCORD_ALERT_CONFIG.VERBOSE_LOGGING_DURATION_MS / 1000;
+    logToBackground(`⏳ Grace period: ${gracePeriodSeconds}s (ignoring alerts while Discord loads)`);
+    logToBackground(`📢 Verbose logging for ${verboseDurationSeconds}s, then quiet mode`);
 
     // Start periodic scanning
     surveillanceInterval = setInterval(performSurveillanceScan, DISCORD_ALERT_CONFIG.CHECK_INTERVAL_MS);
     
-    logToBackground('✅ Surveillance active - monitoring for queue alerts');
+    logToBackground('✅ Surveillance active');
+
+    // Log when grace period ends
+    setTimeout(() => {
+      logToBackground('✅ Grace period ended - now monitoring for alerts');
+    }, DISCORD_ALERT_CONFIG.INITIAL_GRACE_PERIOD_MS);
+
+    // Log when switching to quiet mode
+    setTimeout(() => {
+      logToBackground('🔇');
+      lastPulseTime = Date.now(); // Start pulse timing from quiet mode start
+    }, DISCORD_ALERT_CONFIG.VERBOSE_LOGGING_DURATION_MS);
   };
 
   const stopSurveillance = () => {
     if (surveillanceInterval) {
       clearInterval(surveillanceInterval);
       surveillanceInterval = null;
-      logToBackground('⏹️ Surveillance stopped');
     }
+    logToBackground('⏹️');
   };
 
   // Initialize
