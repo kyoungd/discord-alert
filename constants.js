@@ -2,21 +2,9 @@
 // This file is loaded before contentScript.js
 
 const DISCORD_ALERT_CONFIG = {
-    // Auto-open URLs when queue detected
-    AUTO_OPEN_ENABLED: true,
-    POKEMON_CENTER_URL: 'https://pokemoncenter.com',
-
     // Check Interval (in ms)
     // How often to scan for new messages
     CHECK_INTERVAL_MS: 5000,
-
-    // Initial Grace Period (in ms)
-    // Ignore all alerts during this period after startup (lets Discord fully load)
-    INITIAL_GRACE_PERIOD_MS: 20000, // 20 seconds
-
-    // Alert Debounce (in ms)
-    // Minimum time between alerts to prevent spam
-    ALERT_DEBOUNCE_MS: 30000, // 30 seconds
 
     // Verbose Logging Duration (in ms)
     // How long to show detailed scan logs after startup (then switches to quiet mode)

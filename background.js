@@ -151,13 +151,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       break;
 
-    case 'OPEN_URL':
-      if (message.data.url) {
-        logBackgroundMessage(`🔗 Opening URL: ${message.data.url}`);
-        chrome.tabs.create({ url: message.data.url });
-      }
-      break;
-
     case 'ALERT_PLAYED':
       logBackgroundMessage(`🔊 Alert played on tab ${tabId}`, {
         success: message.data.success,
@@ -258,10 +251,11 @@ setInterval(() => {
   // Scan for Discord pages every heartbeat
   scanForDiscordPages();
 
-  // Clean up old tab status (older than 10 minutes) - silent cleanup
-  const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
+  // Clean up old tab status (older than 5 minutes)
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
   for (const [tabId, status] of tabStatus.entries()) {
-    if (status.lastUpdate < tenMinutesAgo) {
+    if (status.lastUpdate < fiveMinutesAgo) {
+      logBackgroundMessage(`Cleaning up stale tab status: ${tabId}`);
       tabStatus.delete(tabId);
     }
   }

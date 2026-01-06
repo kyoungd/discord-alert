@@ -81,35 +81,6 @@
     return newMessages;
   };
 
-  // Extract Costco product URL from embed (skip membership links)
-  const extractCostcoProductUrl = (embed) => {
-    const links = embed.querySelectorAll('a[href]');
-    
-    for (const link of links) {
-      const surroundingText = (link.parentElement?.textContent || '').toLowerCase();
-      
-      // Must have "queue" or "link" in surrounding text
-      const hasQueueOrLink = surroundingText.includes('queue') || surroundingText.includes('link');
-      
-      // Must NOT have "membership" in surrounding text
-      const hasMembership = surroundingText.includes('membership');
-      
-      if (hasQueueOrLink && !hasMembership) {
-        return link.href;
-      }
-    }
-    
-    // Fallback: return first non-membership link
-    for (const link of links) {
-      const surroundingText = (link.parentElement?.textContent || '').toLowerCase();
-      if (!surroundingText.includes('membership')) {
-        return link.href;
-      }
-    }
-    
-    return null;
-  };
-
   // Check a Discord embed element for queue keywords
   const checkDiscordEmbedForQueue = (element) => {
     // Look for embed descriptions - these contain the main text content
@@ -131,25 +102,21 @@
         return { 
           found: true, 
           type: 'POKEMON_CENTER', 
-          text: textContent.substring(0, 100),
-          url: DISCORD_ALERT_CONFIG.POKEMON_CENTER_URL
+          text: textContent.substring(0, 100)
         };
       }
 
       // Check for Costco queue
       if (/(queue\s*.*?\s*costco)|(costco\s*.*?\s*queue)/i.test(textContent)) {
-        // Extract product URL (skip membership links)
-        const productUrl = extractCostcoProductUrl(embed);
         return { 
           found: true, 
           type: 'COSTCO', 
-          text: textContent.substring(0, 100),
-          url: productUrl
+          text: textContent.substring(0, 100)
         };
       }
 
       // Check for Target queue (mavely.app.link or target.com/p)
-      if (textContent.includes('mavely.app.link') || textContent.includes('target.com/p')) {
+      if (textContent.includes('mavely.app.link') || textContent.includes('target.com/p') || (textContent.includes('up at target')) ) {
         return { found: true, type: 'TARGET', text: textContent.substring(0, 100) };
       }
     }
@@ -416,7 +383,8 @@
     if (!isVerboseMode) {
       const timeSinceLastPulse = now - lastPulseTime;
       if (timeSinceLastPulse >= DISCORD_ALERT_CONFIG.PULSE_INTERVAL_MS) {
-        logToBackground('💓');
+        const audioIcon = hasAudioPermission ? '🔊' : '⚠️';
+        logToBackground(`💓 ${audioIcon}`);
         lastPulseTime = now;
       }
     }
@@ -451,14 +419,6 @@
             });
             
             lastAlertTime = now;
-
-            // Auto-open URL for Pokemon Center and Costco (before alarm)
-            if (DISCORD_ALERT_CONFIG.AUTO_OPEN_ENABLED && result.url) {
-              if (result.type === 'POKEMON_CENTER' || result.type === 'COSTCO') {
-                logToBackground(`🔗 Opening: ${result.url}`);
-                sendStatusMessage('OPEN_URL', { url: result.url });
-              }
-            }
 
             playAlert();
           }
@@ -531,7 +491,8 @@
 
     // Log when switching to quiet mode
     setTimeout(() => {
-      logToBackground('🔇');
+      const audioStatus = hasAudioPermission ? '🔊 Audio ready' : '⚠️ No audio permission';
+      logToBackground(`🤫 Quiet mode | ${audioStatus}`);
       lastPulseTime = Date.now(); // Start pulse timing from quiet mode start
     }, DISCORD_ALERT_CONFIG.VERBOSE_LOGGING_DURATION_MS);
   };
