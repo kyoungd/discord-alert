@@ -17,6 +17,14 @@ const DISCORD_ALERT_CONFIG = {
     // Time restrictions (if enabled)
     ENABLE_TIME_RESTRICTIONS: false,
 
+    // Initial Grace Period (in ms)
+    // Ignore alerts during startup while Discord loads existing messages
+    INITIAL_GRACE_PERIOD_MS: 20000, // 20 seconds
+
+    // Alert Debounce (in ms)
+    // Minimum time between alerts to prevent spam
+    ALERT_DEBOUNCE_MS: 30000, // 30 seconds
+
     // Debug logging
     DEBUG_PRINT: true,
 

@@ -81,13 +81,28 @@
     return newMessages;
   };
 
-  // Check a Discord embed element for queue keywords
-  const checkDiscordEmbedForQueue = (element) => {
-    // Look for embed descriptions - these contain the main text content
-    const embedDescriptions = element.querySelectorAll('[class*="embedDescription"]');
+  // Check a Discord message for queue keywords (both embeds and plain text)
+  const checkMessageForQueue = (element) => {
+    // Find the parent message container to check all content
+    let messageContainer = element.closest('[id^="chat-messages-"]');
+    if (!messageContainer) {
+      // Fallback: traverse up a few levels
+      messageContainer = element.parentElement?.parentElement?.parentElement || element;
+    }
 
-    for (const embed of embedDescriptions) {
-      const textContent = (embed.textContent || '').toLowerCase();
+    // Collect all text sources: embed descriptions AND plain message content
+    const textSources = [
+      ...messageContainer.querySelectorAll('[class*="embedDescription"]'),
+      ...messageContainer.querySelectorAll('[class*="messageContent"]')
+    ];
+
+    // Also check the element itself if no sources found
+    if (textSources.length === 0) {
+      textSources.push(element);
+    }
+
+    for (const source of textSources) {
+      const textContent = (source.textContent || '').toLowerCase();
 
       // Skip if matches any skip strings
       if (DISCORD_ALERT_CONFIG.SKIP_STRINGS.some(skipStr => textContent.includes(skipStr.toLowerCase()))) {
@@ -97,8 +112,8 @@
         continue;
       }
 
-      // Check for Pokemon Center queue
-      if (/pok[eé]mon center\s*queue/i.test(textContent) || /queue.*pok[eé]mon center/i.test(textContent)) {
+      // Check for Pokemon Center queue or security change (handles "pokemon center" or "pokemon-center")
+      if (/pok[eé]mon[\s-]?center\s*(queue|security)/i.test(textContent) || /(queue|security).*pok[eé]mon[\s-]?center/i.test(textContent)) {
         return { 
           found: true, 
           type: 'POKEMON_CENTER', 
@@ -118,6 +133,24 @@
       // Check for Target queue (mavely.app.link or target.com/p)
       if (textContent.includes('mavely.app.link') || textContent.includes('target.com/p') || (textContent.includes('up at target')) ) {
         return { found: true, type: 'TARGET', text: textContent.substring(0, 100) };
+      }
+
+      // Check for Pokemon Restocks and Alerts channel - Item Restocked or new for Pokemon Center/Target/Walmart/Best Buy
+      if (!textContent.includes('pokemon restocks and alerts'))
+        continue;
+      if (textContent.includes('item restocked') || textContent.includes('new item')) {
+        if (textContent.includes('pokemon center') || textContent.includes('pokémon center')) {
+          return { found: true, type: 'POKEMON_CENTER', text: textContent.substring(0, 100)};
+        }
+        if (textContent.includes('target')) {
+          return { found: true, type: 'TARGET', text: textContent.substring(0, 100) };
+        }
+        if (textContent.includes('walmart')) {
+          return { found: true, type: 'WALMART', text: textContent.substring(0, 100) };
+        }
+        if (textContent.includes('best buy')) {
+          return { found: true, type: 'BEST_BUY', text: textContent.substring(0, 100) };
+        }
       }
     }
 
@@ -399,7 +432,7 @@
         logToBackground(`📨 Found ${newMessages.length} new message(s)`);
 
         for (const msg of newMessages) {
-          const result = checkDiscordEmbedForQueue(msg.element);
+          const result = checkMessageForQueue(msg.element);
           
           if (result.found) {
             // Check debounce - don't alert if we just alerted recently
