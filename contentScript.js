@@ -22,7 +22,7 @@
 
   // Startup banner
   logToBackground('═══════════════════════════════════════════════════════════════════════');
-  logToBackground('🔍 SURVEILLANCE ACTIVE');
+  logToBackground('🔍 SURVEILLANCE ACTIVE (service-worker driven)');
   logToBackground(`📍 Channel: ${channelUrl}`);
   logToBackground(`⏰ Checking every ${DISCORD_ALERT_CONFIG.CHECK_INTERVAL_MS / 1000} seconds for queue alerts`);
   logToBackground('═══════════════════════════════════════════════════════════════════════');
@@ -42,11 +42,11 @@
   let hasAudioPermission = false;
   let audioContext = null;
   let pendingAlert = false;
-  let surveillanceInterval = null;
   let surveillanceStartTime = null;
   let lastAlertTime = 0; // For debouncing alerts
   let scanCount = 0; // For pulse timing
   let lastPulseTime = 0; // Track when we last sent a pulse
+  let backgroundPort = null; // Port connection to service worker for scan triggering
 
   // Get new Discord messages (only those with IDs higher than our threshold)
   const getNewDiscordMessages = () => {
@@ -90,9 +90,13 @@
       messageContainer = element.parentElement?.parentElement?.parentElement || element;
     }
 
-    // Collect all text sources: embed descriptions AND plain message content
+    // Collect all text sources: embed titles, descriptions, fields, footers, AND plain message content
     const textSources = [
+      ...messageContainer.querySelectorAll('[class*="embedAuthor"]'),
+      ...messageContainer.querySelectorAll('[class*="embedTitle"]'),
       ...messageContainer.querySelectorAll('[class*="embedDescription"]'),
+      ...messageContainer.querySelectorAll('[class*="embedField"]'),
+      ...messageContainer.querySelectorAll('[class*="embedFooter"]'),
       ...messageContainer.querySelectorAll('[class*="messageContent"]')
     ];
 
@@ -101,56 +105,66 @@
       textSources.push(element);
     }
 
-    for (const source of textSources) {
-      const textContent = (source.textContent || '').toLowerCase();
+    // Combine all text from the message for comprehensive checking
+    const combinedText = Array.from(textSources).map(s => s.textContent || '').join(' ').toLowerCase();
 
-      // Skip if matches any skip strings
-      if (DISCORD_ALERT_CONFIG.SKIP_STRINGS.some(skipStr => textContent.includes(skipStr.toLowerCase()))) {
-        if (DISCORD_ALERT_CONFIG.DEBUG_PRINT) {
-          logToBackground('Skipping message - matches skip string');
-        }
-        continue;
+    // Debug: print combined text for each new message
+    if (DISCORD_ALERT_CONFIG.DEBUG_PRINT) {
+      logToBackground(`📝 Combined text: ${combinedText}`);
+    }
+
+    // Skip if matches any skip strings
+    if (DISCORD_ALERT_CONFIG.SKIP_STRINGS.some(skipStr => combinedText.includes(skipStr.toLowerCase()))) {
+      if (DISCORD_ALERT_CONFIG.DEBUG_PRINT) {
+        logToBackground('Skipping message - matches skip string');
       }
+      return { found: false };
+    }
 
-      // Check for Pokemon Center queue or security change (handles "pokemon center" or "pokemon-center")
-      if (/pok[eé]mon[\s-]?center\s*(queue|security)/i.test(textContent) || /(queue|security).*pok[eé]mon[\s-]?center/i.test(textContent)) {
-        return { 
-          found: true, 
-          type: 'POKEMON_CENTER', 
-          text: textContent.substring(0, 100)
-        };
-      }
+    // Check for Pokemon Center queue or security change (handles "pokemon center" or "pokemon-center")
+    if (/pok[eé]mon[\s-]?center\s*(queue|security)/i.test(combinedText) || /(queue|security).*pok[eé]mon[\s-]?center/i.test(combinedText)) {
+      return {
+        found: true,
+        type: 'POKEMON_CENTER',
+        text: combinedText.substring(0, 100)
+      };
+    }
 
-      // Check for Costco queue
-      if (/(queue\s*.*?\s*costco)|(costco\s*.*?\s*queue)/i.test(textContent)) {
-        return { 
-          found: true, 
-          type: 'COSTCO', 
-          text: textContent.substring(0, 100)
-        };
-      }
+    // Check for Costco queue
+    if (/(queue\s*.*?\s*costco)|(costco\s*.*?\s*queue)/i.test(combinedText)) {
+      return {
+        found: true,
+        type: 'COSTCO',
+        text: combinedText.substring(0, 100)
+      };
+    }
 
-      // Check for Target queue (mavely.app.link or target.com/p)
-      if (textContent.includes('mavely.app.link') || textContent.includes('target.com/p') || (textContent.includes('up at target')) ) {
-        return { found: true, type: 'TARGET', text: textContent.substring(0, 100) };
-      }
+    // Check for Target queue (mavely.app.link or target.com/p)
+    if (combinedText.includes('mavely.app.link') || combinedText.includes('target.com/p') || combinedText.includes('up at target')) {
+      return { found: true, type: 'TARGET', text: combinedText.substring(0, 100) };
+    }
 
+    // Queue detection for pokemon center (important to keep this code. early warning)
+    if (combinedText.includes('queue detected (potential release)')) {
+      return { found: true, type: 'POKEMON_CENTER', text: combinedText.substring(0, 100) };
+    }
+
+    if (combinedText.includes('pokemon restocks and alerts')) {
       // Check for Pokemon Restocks and Alerts channel - Item Restocked or new for Pokemon Center/Target/Walmart/Best Buy
-      if (!textContent.includes('pokemon restocks and alerts'))
-        continue;
-      if (textContent.includes('item restocked') || textContent.includes('new item')) {
-        if (textContent.includes('pokemon center') || textContent.includes('pokémon center')) {
-          return { found: true, type: 'POKEMON_CENTER', text: textContent.substring(0, 100)};
+      if (combinedText.includes('item restocked') || combinedText.includes('new item')) {
+        if (combinedText.includes('pokemon center') || combinedText.includes('pokémon center')) {
+          return { found: true, type: 'POKEMON_CENTER', text: combinedText.substring(0, 100) };
         }
-        if (textContent.includes('target')) {
-          return { found: true, type: 'TARGET', text: textContent.substring(0, 100) };
+        if (combinedText.includes('pokemon restocks and alerts • target')) {
+          return { found: true, type: 'TARGET', text: combinedText.substring(0, 100) };
         }
-        if (textContent.includes('walmart')) {
-          return { found: true, type: 'WALMART', text: textContent.substring(0, 100) };
+        if (combinedText.includes('pokemon restocks and alerts • walmart')) {
+          return { found: true, type: 'WALMART', text: combinedText.substring(0, 100) };
         }
-        if (textContent.includes('best buy')) {
-          return { found: true, type: 'BEST_BUY', text: textContent.substring(0, 100) };
+        if (combinedText.includes('pokemon restocks and alerts • best buy')) {
+          return { found: true, type: 'BEST_BUY', text: combinedText.substring(0, 100) };
         }
+        return { found: true, type: 'UNSURE', text: combinedText.substring(0, 100) };
       }
     }
 
@@ -403,7 +417,7 @@
     }
   });
 
-  // Main surveillance function - runs every 5 seconds
+  // Main surveillance function - triggered by service worker every 10 seconds
   const performSurveillanceScan = () => {
     const now = Date.now();
     const timeSinceStart = now - surveillanceStartTime;
@@ -478,18 +492,23 @@
     });
   };
 
-  // Start the surveillance interval
+  // Start surveillance with service-worker-driven scanning (not throttled in background tabs)
   const startSurveillance = () => {
-    if (surveillanceInterval) {
-      clearInterval(surveillanceInterval);
+    // Disconnect existing port if any
+    if (backgroundPort) {
+      try {
+        backgroundPort.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
     }
 
-    logToBackground('🚀 Starting surveillance...');
-    
+    logToBackground('🚀 Starting surveillance (service-worker driven)...');
+
     // Find the highest message ID on the page - only messages newer than this will trigger alerts
     const existingMessages = document.querySelectorAll('[id^="message-accessories-"]');
     let messageCount = 0;
-    
+
     for (const container of existingMessages) {
       const messageIdStr = container.id.replace('message-accessories-', '');
       try {
@@ -502,8 +521,40 @@
         // Skip invalid IDs
       }
     }
-    
+
     logToBackground(`📋 Found ${messageCount} existing messages, threshold ID: ${highestSeenMessageId}`);
+
+    // Print the last 3 messages after a delay (Discord loads messages async)
+    setTimeout(() => {
+      const messages = document.querySelectorAll('[id^="message-accessories-"]');
+      if (messages.length > 0) {
+        logToBackground('----------------------------------------');
+        logToBackground('📄 LAST 3 MESSAGES PREVIEW:');
+
+        // Get last 3 messages (or fewer if less available)
+        const startIndex = Math.max(0, messages.length - 3);
+        for (let i = startIndex; i < messages.length; i++) {
+          const messageContainer = messages[i];
+          let msgContainer = messageContainer.closest('[id^="chat-messages-"]');
+          if (!msgContainer) {
+            msgContainer = messageContainer.parentElement?.parentElement?.parentElement || messageContainer;
+          }
+          const textSources = [
+            ...msgContainer.querySelectorAll('[class*="embedAuthor"]'),
+            ...msgContainer.querySelectorAll('[class*="embedTitle"]'),
+            ...msgContainer.querySelectorAll('[class*="embedDescription"]'),
+            ...msgContainer.querySelectorAll('[class*="embedField"]'),
+            ...msgContainer.querySelectorAll('[class*="embedFooter"]'),
+            ...msgContainer.querySelectorAll('[class*="messageContent"]')
+          ];
+          const combinedText = Array.from(textSources).map(s => s.textContent || '').join(' | ');
+          logToBackground(`[${i - startIndex + 1}] ${combinedText || '(no text found)'}`);
+        }
+        logToBackground('----------------------------------------');
+      } else {
+        logToBackground('⚠️ No messages found for preview');
+      }
+    }, 3000); // Wait 3 seconds for Discord to load messages
 
     // Track start time for verbose/quiet mode switching
     surveillanceStartTime = Date.now();
@@ -512,10 +563,31 @@
     logToBackground(`⏳ Grace period: ${gracePeriodSeconds}s (ignoring alerts while Discord loads)`);
     logToBackground(`📢 Verbose logging for ${verboseDurationSeconds}s, then quiet mode`);
 
-    // Start periodic scanning
-    surveillanceInterval = setInterval(performSurveillanceScan, DISCORD_ALERT_CONFIG.CHECK_INTERVAL_MS);
-    
-    logToBackground('✅ Surveillance active');
+    // Connect to service worker for scan triggering
+    backgroundPort = chrome.runtime.connect({ name: 'discord-alert-scanner' });
+
+    // Listen for SCAN_NOW messages from service worker
+    backgroundPort.onMessage.addListener((message) => {
+      if (message.type === 'SCAN_NOW') {
+        performSurveillanceScan();
+      }
+    });
+
+    // Handle port disconnect (service worker restart, etc.)
+    backgroundPort.onDisconnect.addListener(() => {
+      logToBackground('⚠️ Lost connection to service worker, reconnecting...');
+      backgroundPort = null;
+      // Try to reconnect after a short delay
+      setTimeout(() => {
+        chrome.storage.sync.get({ isEnabled: true }, (s) => {
+          if (s.isEnabled) {
+            startSurveillance();
+          }
+        });
+      }, 1000);
+    });
+
+    logToBackground('✅ Surveillance active (service-worker driven)');
 
     // Log when grace period ends
     setTimeout(() => {
@@ -531,9 +603,13 @@
   };
 
   const stopSurveillance = () => {
-    if (surveillanceInterval) {
-      clearInterval(surveillanceInterval);
-      surveillanceInterval = null;
+    if (backgroundPort) {
+      try {
+        backgroundPort.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors
+      }
+      backgroundPort = null;
     }
     logToBackground('⏹️');
   };
@@ -557,7 +633,7 @@
   });
 
   // React to toggle changes
-  chrome.storage.onChanged.addListener((changes, area) => {
+  chrome.storage.onChanged.addListener((_changes, area) => {
     if (area !== 'sync') return;
     
     chrome.storage.sync.get({ isEnabled: true }, (s) => {

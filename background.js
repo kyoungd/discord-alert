@@ -7,82 +7,52 @@ const DEBUG_PRINT = true;
 // Track active tabs and their status
 const tabStatus = new Map();
 
+// Track connected content script ports for service-worker-driven scanning
+const connectedPorts = new Map(); // tabId -> port
+
+// Scan interval ID
+let scanIntervalId = null;
+
 // Log all messages to console with timestamps
 const logBackgroundMessage = (message, data = null) => {
   const timestamp = new Date().toLocaleTimeString();
   console.log(`[${timestamp}] [Discord Alert Background] ${message}`, data || '');
 };
 
-// Handle installation
-chrome.runtime.onInstalled.addListener((details) => {
-  logBackgroundMessage('Extension installed/updated', { reason: details.reason });
+// Service-worker-driven scan interval (not throttled like content script setInterval)
+const SCAN_INTERVAL_MS = 10000; // 10 seconds
 
-  // Set default settings
-  chrome.storage.sync.set({ isEnabled: true }, () => {
-    logBackgroundMessage('Default settings initialized');
-  });
+// Start the scan interval if not already running
+const startScanInterval = () => {
+  if (scanIntervalId) return; // Already running
 
-  // Check if audio permission is needed
-  checkAndRequestAudioPermission();
-});
+  logBackgroundMessage('🚀 Starting service-worker-driven scan interval');
+  scanIntervalId = setInterval(() => {
+    if (connectedPorts.size === 0) return;
 
-// Handle startup
-chrome.runtime.onStartup.addListener(() => {
-  logBackgroundMessage('Browser started, service worker active');
-
-  // Check audio permission on startup too
-  setTimeout(checkAndRequestAudioPermission, 2000);
-});
-
-// Check audio permission and auto-open popup if needed
-const checkAndRequestAudioPermission = async () => {
-  try {
-    const { audioPermission } = await chrome.storage.sync.get({ audioPermission: false });
-
-    if (!audioPermission) {
-      logBackgroundMessage('🔊 No audio permission detected - checking for Discord tabs...');
-
-      // Check if user has Discord tabs open
-      chrome.tabs.query({}, (tabs) => {
-        const discordTabs = tabs.filter(tab =>
-          tab.url?.includes('discord.com/channels')
-        );
-
-        if (discordTabs.length > 0) {
-          logBackgroundMessage(`📍 Found ${discordTabs.length} Discord tab(s) - opening popup for audio permission`);
-
-          // Focus the first Discord tab and open popup
-          chrome.tabs.update(discordTabs[0].id, { active: true }, () => {
-            // Small delay to ensure tab is focused
-            setTimeout(() => {
-              chrome.action.openPopup().then(() => {
-                logBackgroundMessage('✅ Popup opened automatically for audio permission');
-              }).catch(e => {
-                logBackgroundMessage('❌ Failed to auto-open popup (user interaction required):', e.message);
-                // Set a badge to draw attention
-                chrome.action.setBadgeText({ text: '!' });
-                chrome.action.setBadgeBackgroundColor({ color: '#ff4444' });
-                chrome.action.setTitle({ title: 'Click to enable Pokemon queue audio alerts' });
-              });
-            }, 500);
-          });
-        } else {
-          logBackgroundMessage('⚪ No Discord tabs found - will check audio permission when user visits Discord');
-        }
-      });
-    } else {
-      logBackgroundMessage('✅ Audio permission already granted');
-      // Clear any badge
-      chrome.action.setBadgeText({ text: '' });
-      chrome.action.setTitle({ title: 'Discord Alerts - Pokemon Queue Monitor' });
+    // Send SCAN_NOW to all connected content scripts
+    for (const [tabId, port] of connectedPorts.entries()) {
+      try {
+        port.postMessage({ type: 'SCAN_NOW' });
+      } catch (e) {
+        logBackgroundMessage(`Failed to send scan to tab ${tabId}, removing port`);
+        connectedPorts.delete(tabId);
+      }
     }
-  } catch (e) {
-    logBackgroundMessage('Error checking audio permission:', e);
+  }, SCAN_INTERVAL_MS);
+};
+
+// Stop the scan interval if no ports connected
+const stopScanIntervalIfEmpty = () => {
+  if (connectedPorts.size === 0 && scanIntervalId) {
+    logBackgroundMessage('⏹️ No connected tabs, stopping scan interval');
+    clearInterval(scanIntervalId);
+    scanIntervalId = null;
   }
 };
 
-// Listen for messages from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+// Shared message handler for both port and runtime messages
+const handleContentScriptMessage = (message, sender) => {
   const tabId = sender.tab?.id;
   const url = sender.tab?.url;
 
@@ -174,9 +144,114 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     default:
-      logBackgroundMessage('Unknown message type', { type: message.type, data: message.data });
+      if (DEBUG_PRINT) {
+        logBackgroundMessage('Unknown message type', { type: message.type, data: message.data });
+      }
+  }
+};
+
+// Handle port connections from content scripts
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'discord-alert-scanner') return;
+
+  const tabId = port.sender?.tab?.id;
+  if (!tabId) {
+    logBackgroundMessage('Port connection without tab ID, ignoring');
+    return;
   }
 
+  logBackgroundMessage(`📡 Content script connected: tab ${tabId}`);
+  connectedPorts.set(tabId, port);
+
+  // Start scan interval when first port connects
+  startScanInterval();
+
+  // Handle port disconnect
+  port.onDisconnect.addListener(() => {
+    logBackgroundMessage(`📡 Content script disconnected: tab ${tabId}`);
+    connectedPorts.delete(tabId);
+    stopScanIntervalIfEmpty();
+  });
+
+  // Handle messages from content script via port
+  port.onMessage.addListener((message) => {
+    // Forward to regular message handler with synthesized sender
+    const syntheticSender = { tab: port.sender?.tab };
+    handleContentScriptMessage(message, syntheticSender);
+  });
+});
+
+// Handle installation
+chrome.runtime.onInstalled.addListener((details) => {
+  logBackgroundMessage('Extension installed/updated', { reason: details.reason });
+
+  // Set default settings
+  chrome.storage.sync.set({ isEnabled: true }, () => {
+    logBackgroundMessage('Default settings initialized');
+  });
+
+  // Check if audio permission is needed
+  checkAndRequestAudioPermission();
+});
+
+// Handle startup
+chrome.runtime.onStartup.addListener(() => {
+  logBackgroundMessage('Browser started, service worker active');
+
+  // Check audio permission on startup too
+  setTimeout(checkAndRequestAudioPermission, 2000);
+});
+
+// Check audio permission and auto-open popup if needed
+const checkAndRequestAudioPermission = async () => {
+  try {
+    const { audioPermission } = await chrome.storage.sync.get({ audioPermission: false });
+
+    if (!audioPermission) {
+      logBackgroundMessage('🔊 No audio permission detected - checking for Discord tabs...');
+
+      // Check if user has Discord tabs open
+      chrome.tabs.query({}, (tabs) => {
+        const discordTabs = tabs.filter(tab =>
+          tab.url?.includes('discord.com/channels')
+        );
+
+        if (discordTabs.length > 0) {
+          logBackgroundMessage(`📍 Found ${discordTabs.length} Discord tab(s) - opening popup for audio permission`);
+
+          // Focus the first Discord tab and open popup
+          chrome.tabs.update(discordTabs[0].id, { active: true }, () => {
+            // Small delay to ensure tab is focused
+            setTimeout(() => {
+              chrome.action.openPopup().then(() => {
+                logBackgroundMessage('✅ Popup opened automatically for audio permission');
+              }).catch(e => {
+                logBackgroundMessage('❌ Failed to auto-open popup (user interaction required):', e.message);
+                // Set a badge to draw attention
+                chrome.action.setBadgeText({ text: '!' });
+                chrome.action.setBadgeBackgroundColor({ color: '#ff4444' });
+                chrome.action.setTitle({ title: 'Click to enable Pokemon queue audio alerts' });
+              });
+            }, 500);
+          });
+        } else {
+          logBackgroundMessage('⚪ No Discord tabs found - will check audio permission when user visits Discord');
+        }
+      });
+    } else {
+      logBackgroundMessage('✅ Audio permission already granted');
+      // Clear any badge
+      chrome.action.setBadgeText({ text: '' });
+      chrome.action.setTitle({ title: 'Discord Alerts - Pokemon Queue Monitor' });
+    }
+  } catch (e) {
+    logBackgroundMessage('Error checking audio permission:', e);
+  }
+};
+
+// Listen for messages from content scripts (runtime.sendMessage)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  handleContentScriptMessage(message, sender);
   // Send acknowledgment
   sendResponse({ received: true, timestamp: Date.now() });
 });

@@ -3,12 +3,12 @@
 
 const DISCORD_ALERT_CONFIG = {
     // Check Interval (in ms)
-    // How often to scan for new messages
-    CHECK_INTERVAL_MS: 5000,
+    // How often to scan for new messages (service worker driven)
+    CHECK_INTERVAL_MS: 10000,
 
     // Verbose Logging Duration (in ms)
     // How long to show detailed scan logs after startup (then switches to quiet mode)
-    VERBOSE_LOGGING_DURATION_MS: 60000, // 60 seconds = 1 minute
+    VERBOSE_LOGGING_DURATION_MS: 60000, // 60 seconds, then switches to quiet mode
 
     // Pulse Interval (in ms)
     // How often to show a heartbeat icon in quiet mode
